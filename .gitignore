@@ -1,0 +1,15 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+chunks.json
+embedded_chunks.json
+runtime_evidence.json
+runtime_failure.json
+runtime_tests.json
+git_evidence.json
+git_regression.json
+context_package.json
+hypothesis.json
