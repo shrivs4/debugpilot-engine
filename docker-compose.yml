@@ -1,0 +1,76 @@
+name: debugpilot
+
+# Ollama is NOT a service here: it runs on the host (Mac) and the API reaches
+# it through host.docker.internal. Values below come from .env (see
+# .env.example) with safe defaults.
+
+services:
+  postgres:
+    # pgvector/pgvector:pg16 plus apps/api/db/init/*.sql as init scripts.
+    build:
+      context: ./apps/api/db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-debugpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-debugpilot}
+      POSTGRES_DB: ${POSTGRES_DB:-debugpilot}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./apps/api
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-debugpilot}:${POSTGRES_PASSWORD:-debugpilot}@postgres:5432/${POSTGRES_DB:-debugpilot}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      GENERATION_MODEL: ${GENERATION_MODEL:-qwen2.5-coder:7b}
+      WORKSPACE_DIR: /workspace
+      MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-200000}
+      SETUP_COMMAND_TIMEOUT_SECONDS: ${SETUP_COMMAND_TIMEOUT_SECONDS:-900}
+      ANALYSIS_COMMAND_TIMEOUT_SECONDS: ${ANALYSIS_COMMAND_TIMEOUT_SECONDS:-180}
+      CORS_ORIGINS: http://localhost:${WEB_HOST_PORT:-5173},http://127.0.0.1:${WEB_HOST_PORT:-5173}
+      EXPORT_DEBUG_JSON: ${EXPORT_DEBUG_JSON:-false}
+    extra_hosts:
+      # Built in on Docker Desktop for Mac; needed on Linux engines.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Managed clones live in a named volume, never in a host path chosen by a user.
+      - workspace:/workspace
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+
+  web:
+    build:
+      context: ./apps/web
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-5173}:5173"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  workspace:

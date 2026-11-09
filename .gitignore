@@ -1,9 +1,28 @@
+# Python
 .venv/
 venv/
 __pycache__/
 *.py[cod]
-.DS_Store
+.pytest_cache/
 
+# Node / frontend
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data: clones, evidence, logs, exports, database files
+workspace/
+exports/
+*.log
+pgdata/
+
+# POC outputs (generated embeddings and evidence; see poc/README.md)
 chunks.json
 embedded_chunks.json
 runtime_evidence.json
@@ -13,3 +32,8 @@ git_evidence.json
 git_regression.json
 context_package.json
 hypothesis.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
