@@ -1,6 +1,9 @@
 export type RepositoryStatus = "pending" | "cloning" | "syncing" | "indexing" | "ready" | "error";
 export type RunStatus = "draft" | "queued" | "running" | "completed" | "failed";
 export type CheckStatus = "passed" | "failed" | "skipped";
+export type OverallResult = "validated" | "needs_review" | "rejected";
+export type RunResult = OverallResult | "no_bug_detected";
+export type RunType = "issue" | "commit_analysis";
 
 export interface RepositorySync {
   id: number;
@@ -44,13 +47,16 @@ export interface DebugRun {
   issue_description: string;
   setup_command: string | null;
   setup_command_approved_at: string | null;
-  analysis_command: string;
+  analysis_command: string | null;
   analysis_command_approved_at: string | null;
+  run_type?: RunType;
+  base_commit?: string | null;
+  target_commit?: string | null;
   status: RunStatus;
   current_step: string | null;
   error: string | null;
   commit_sha: string | null;
-  overall_result: "validated" | "needs_review" | null;
+  overall_result: RunResult | null;
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -74,6 +80,40 @@ export interface StackTrace {
   raw: string;
 }
 
+export interface Mismatch {
+  field: string;
+  label: string;
+  expected: string;
+  actual: string;
+  numeric_delta: number | null;
+  ratio: number | null;
+  source_line: string;
+}
+
+export interface MismatchAnalysis {
+  proportional_groups: { ratio: number; fields: string[] }[];
+  earliest_field: string | null;
+  root_fields: string[];
+  propagated_fields: string[];
+  dependencies: Record<string, string[]>;
+  method: "output_order" | "code_dependencies";
+  notes: string[];
+}
+
+export interface StructuredRuntime {
+  extracted: boolean;
+  exit_code: number | null;
+  timed_out: boolean;
+  expected: Record<string, string>;
+  actual: Record<string, string>;
+  mismatches: Mismatch[];
+  mismatched_fields: string[];
+  errors: string[];
+  locations: { file_path: string; line: number; function: string | null; source: string }[];
+  structured_logs: { format: "json" | "logfmt"; data: Record<string, unknown> }[];
+  mismatch_analysis: MismatchAnalysis;
+}
+
 export interface RuntimeEvidence {
   id: number;
   phase: "setup" | "analysis" | null;
@@ -83,7 +123,13 @@ export interface RuntimeEvidence {
   stdout: string | null;
   stderr: string | null;
   stack_trace: StackTrace | null;
-  data: { duration_ms?: number; timed_out?: boolean; error?: string | null; started_at?: string };
+  data: {
+    duration_ms?: number;
+    timed_out?: boolean;
+    error?: string | null;
+    started_at?: string;
+    structured?: StructuredRuntime | null;
+  };
   captured_at: string;
 }
 
@@ -101,6 +147,27 @@ export interface CodeEvidence {
   combined_score: number;
   matched_keywords: string[];
   sources: string[];
+  role?: "primary" | "related";
+  reasons?: RetrievalReason[];
+  relation?: Relation | null;
+}
+
+export interface RetrievalReason {
+  signal: string;
+  score: number;
+  weight: number | null;
+  contribution: number;
+  detail: string;
+}
+
+export interface Relation {
+  type: string;
+  via: string;
+  depth: number;
+  from_chunk_id: number;
+  from_symbol: string;
+  from_file: string;
+  path: string;
 }
 
 export interface GitEvidence {
@@ -127,6 +194,8 @@ export interface Hypothesis {
   confidence: string | null;
   execution_path: string[];
   missing_evidence: string[];
+  affected_fields?: string[];
+  rank?: number;
   parse_ok: boolean;
   raw_response: string;
   duration_ms: number | null;
@@ -137,17 +206,19 @@ export interface ValidationCheck {
   status: CheckStatus;
   details: string;
   required: boolean;
+  category?: "runtime" | "behavior" | "evidence" | "conflict";
 }
 
 export interface Validation {
   id: number;
-  overall_result: "validated" | "needs_review";
+  overall_result: OverallResult;
   checks: ValidationCheck[];
 }
 
 export interface TicketDraft {
   id: number;
   debug_run_id: number;
+  hypothesis_id?: number | null;
   provider: string;
   ticket_key: string;
   title: string;
@@ -171,6 +242,38 @@ export interface DebugRunReport {
   hypothesis: Hypothesis | null;
   validation: Validation | null;
   ticket_draft: TicketDraft | null;
+  hypotheses?: { hypothesis: Hypothesis; validation: Validation | null }[];
+  commit_analysis?: CommitAnalysis | null;
+  conclusion?: { result: "no_bug_detected"; message: string; command?: string | null } | null;
+}
+
+export interface Commit {
+  sha: string;
+  short: string;
+  parents: string[];
+  author: string;
+  date: string;
+  subject: string;
+}
+
+export interface CommitAnalysis {
+  base?: string | null;
+  head?: string;
+  mode?: "commit" | "range";
+  notes?: string | null;
+  commits?: { sha: string; short: string; author: string; date: string; subject: string }[];
+  changed_files?: { status: string; file_path: string; symbols: string[]; line_ranges: [number, number][] }[];
+  diff_truncated?: boolean;
+}
+
+export interface CommitAnalysisCreate {
+  repository_id: number;
+  commit_sha?: string;
+  base_sha?: string;
+  head_sha?: string;
+  setup_command: string | null;
+  analysis_command: string | null;
+  notes: string | null;
 }
 
 export interface Health {

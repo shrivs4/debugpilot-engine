@@ -1,4 +1,4 @@
-import type { DebugRun, DebugRunReport, Health, Repository, TicketDraft } from "./types";
+import type { Commit, CommitAnalysisCreate, DebugRun, DebugRunReport, Health, Repository, TicketDraft } from "./types";
 
 const BASE = "/api";
 
@@ -46,5 +46,8 @@ export const api = {
     post<DebugRun>(`/debug-runs/${id}/approve-command`, { kind, command }),
   startRun: (id: number) => post<DebugRun>(`/debug-runs/${id}/run`),
   report: (id: number) => request<DebugRunReport>(`/debug-runs/${id}/report`),
-  createJiraDraft: (id: number) => post<TicketDraft>(`/debug-runs/${id}/jira-draft`),
+  createJiraDraft: (id: number, hypothesisId: number) =>
+    post<TicketDraft>(`/debug-runs/${id}/jira-draft`, { hypothesis_id: hypothesisId }),
+  listCommits: (repositoryId: number, limit = 50) => request<Commit[]>(`/repositories/${repositoryId}/commits?limit=${limit}`),
+  createCommitAnalysis: (body: CommitAnalysisCreate) => post<DebugRun>("/commit-analyses", body),
 };

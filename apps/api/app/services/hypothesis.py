@@ -26,6 +26,7 @@ HYPOTHESIS_SCHEMA = {
         "introducing_commit": {"type": "string"},
         "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
         "missing_evidence": {"type": "array", "items": {"type": "string"}},
+        "affected_fields": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
         "summary",
@@ -37,7 +38,14 @@ HYPOTHESIS_SCHEMA = {
         "introducing_commit",
         "confidence",
         "missing_evidence",
+        "affected_fields",
     ],
+}
+
+HYPOTHESIS_LIST_SCHEMA = {
+    "type": "object",
+    "properties": {"hypotheses": {"type": "array", "items": HYPOTHESIS_SCHEMA}},
+    "required": ["hypotheses"],
 }
 
 
@@ -77,6 +85,7 @@ def normalize_fields(data: dict) -> dict:
         "introducing_commit": str(data.get("introducing_commit") or "").strip() or None,
         "confidence": confidence if confidence in {"low", "medium", "high"} else None,
         "missing_evidence": _as_list(data.get("missing_evidence")),
+        "affected_fields": _as_list(data.get("affected_fields")),
     }
 
 
@@ -115,6 +124,49 @@ def generate_hypothesis(ollama: OllamaClient, prompt: str, settings: Settings) -
         model=settings.generation_model,
         raw_response=raw,
         fields=fields,
+        parse_ok=parse_ok,
+        duration_ms=result.get("duration_ms"),
+    )
+
+
+@dataclass
+class GeneratedHypotheses:
+    model: str
+    raw_response: str
+    items: list[dict]
+    parse_ok: bool
+    duration_ms: int | None
+
+
+def parse_hypothesis_list(raw: str, limit: int) -> tuple[list[dict], bool]:
+    """`{"hypotheses": [...]}`; a single hypothesis object or free text falls back to one item."""
+    for candidate in (raw, *re.findall(r"\{.*\}", raw or "", flags=re.DOTALL)):
+        try:
+            data = json.loads(candidate)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("hypotheses"), list):
+            items = [normalize_fields(item) for item in data["hypotheses"] if isinstance(item, dict)]
+            return items[:limit], True
+        if isinstance(data, dict):
+            return [normalize_fields(data)], True
+    fields, parse_ok = parse_hypothesis_response(raw)
+    return [fields], parse_ok
+
+
+def generate_hypotheses(ollama: OllamaClient, prompt: str, settings: Settings, limit: int) -> GeneratedHypotheses:
+    result = ollama.generate(
+        prompt,
+        settings.generation_model,
+        response_format=HYPOTHESIS_LIST_SCHEMA,
+        options={"temperature": settings.generation_temperature, "num_ctx": settings.generation_num_ctx},
+    )
+    raw = result.get("response", "")
+    items, parse_ok = parse_hypothesis_list(raw, limit)
+    return GeneratedHypotheses(
+        model=settings.generation_model,
+        raw_response=raw,
+        items=items,
         parse_ok=parse_ok,
         duration_ms=result.get("duration_ms"),
     )

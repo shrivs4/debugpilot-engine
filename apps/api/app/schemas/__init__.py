@@ -55,6 +55,26 @@ class DebugRunCreate(BaseModel):
     analysis_command: str = Field(min_length=1)
 
 
+class CommitAnalysisCreate(BaseModel):
+    repository_id: int
+    # Either one commit (compared with its parent) or a base..head range.
+    commit_sha: str | None = None
+    base_sha: str | None = None
+    head_sha: str | None = None
+    setup_command: str | None = None
+    analysis_command: str | None = None
+    notes: str | None = None
+
+
+class CommitOut(BaseModel):
+    sha: str
+    short: str
+    parents: list[str]
+    author: str
+    date: str
+    subject: str
+
+
 class CommandApproval(BaseModel):
     kind: Literal["setup", "analysis"]
     # The exact command text the user saw and confirmed.
@@ -68,8 +88,11 @@ class DebugRunOut(ORMModel):
     issue_description: str
     setup_command: str | None
     setup_command_approved_at: datetime | None
-    analysis_command: str
+    analysis_command: str | None
     analysis_command_approved_at: datetime | None
+    run_type: str = "issue"
+    base_commit: str | None = None
+    target_commit: str | None = None
     status: str
     current_step: str | None
     error: str | None
@@ -106,6 +129,8 @@ class HypothesisOut(ORMModel):
     confidence: str | None
     execution_path: list[str]
     missing_evidence: list[str]
+    affected_fields: list[str] = []
+    rank: int = 1
     parse_ok: bool
     raw_response: str
     duration_ms: int | None
@@ -119,9 +144,15 @@ class ValidationOut(ORMModel):
     created_at: datetime
 
 
+class JiraDraftRequest(BaseModel):
+    # Required when the run has more than one hypothesis.
+    hypothesis_id: int | None = None
+
+
 class TicketDraftOut(ORMModel):
     id: int
     debug_run_id: int
+    hypothesis_id: int | None = None
     provider: str
     ticket_key: str
     title: str
@@ -136,6 +167,11 @@ class TicketDraftOut(ORMModel):
     created_at: datetime
 
 
+class HypothesisResult(BaseModel):
+    hypothesis: HypothesisOut
+    validation: ValidationOut | None
+
+
 class DebugRunReport(BaseModel):
     run: DebugRunOut
     repository: RepositoryOut
@@ -145,3 +181,7 @@ class DebugRunReport(BaseModel):
     hypothesis: HypothesisOut | None
     validation: ValidationOut | None
     ticket_draft: TicketDraftOut | None
+    hypotheses: list[HypothesisResult] = []
+    commit_analysis: dict[str, Any] | None = None
+    # Set when the run reached a conclusion without a hypothesis, e.g. {"result": "no_bug_detected", "message": ...}.
+    conclusion: dict[str, Any] | None = None

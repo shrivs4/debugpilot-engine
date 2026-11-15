@@ -1,6 +1,7 @@
 import { api } from "./api";
 import { Badge } from "./components/ui";
 import { useHashRoute, usePolling } from "./hooks";
+import { CommitAnalysisPage } from "./pages/CommitAnalysisPage";
 import { DebugRunDetailPage } from "./pages/DebugRunDetailPage";
 import { DebugRunsPage } from "./pages/DebugRunsPage";
 import { NewDebugRunPage } from "./pages/NewDebugRunPage";
@@ -9,6 +10,7 @@ import { RepositoriesPage } from "./pages/RepositoriesPage";
 const NAV = [
   { path: "/repositories", label: "Repositories" },
   { path: "/runs/new", label: "New Debug Run" },
+  { path: "/commits/new", label: "Commit Analysis" },
   { path: "/runs", label: "Debug Runs" },
 ];
 
@@ -31,6 +33,7 @@ export function App() {
   let page;
   if (runMatch) page = <DebugRunDetailPage runId={Number(runMatch[1])} />;
   else if (route === "/runs/new" || route.startsWith("/runs/new?")) page = <NewDebugRunPage />;
+  else if (route === "/commits/new") page = <CommitAnalysisPage />;
   else if (route === "/runs") page = <DebugRunsPage />;
   else page = <RepositoriesPage />;
 

@@ -193,3 +193,25 @@ CREATE TABLE IF NOT EXISTS ticket_drafts (
 
 CREATE INDEX IF NOT EXISTS ix_ticket_drafts_run
     ON ticket_drafts (debug_run_id, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Phase 2 (idempotent): commit analysis runs, ranked hypotheses, rejected status.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE debug_runs ADD COLUMN IF NOT EXISTS run_type TEXT NOT NULL DEFAULT 'issue';
+ALTER TABLE debug_runs ADD COLUMN IF NOT EXISTS base_commit TEXT;
+ALTER TABLE debug_runs ADD COLUMN IF NOT EXISTS target_commit TEXT;
+ALTER TABLE debug_runs ADD COLUMN IF NOT EXISTS commit_analysis JSONB;
+ALTER TABLE debug_runs ALTER COLUMN analysis_command DROP NOT NULL;
+ALTER TABLE debug_runs DROP CONSTRAINT IF EXISTS debug_runs_run_type_check;
+ALTER TABLE debug_runs ADD CONSTRAINT debug_runs_run_type_check CHECK (run_type IN ('issue', 'commit_analysis'));
+
+ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS affected_fields JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE hypotheses ADD COLUMN IF NOT EXISTS rank INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE validation_results DROP CONSTRAINT IF EXISTS validation_results_overall_result_check;
+ALTER TABLE validation_results ADD CONSTRAINT validation_results_overall_result_check
+    CHECK (overall_result IN ('validated', 'needs_review', 'rejected'));
+
+-- Jira safety gate: a draft records the (validated) hypothesis it was created from.
+ALTER TABLE ticket_drafts ADD COLUMN IF NOT EXISTS hypothesis_id BIGINT REFERENCES hypotheses (id) ON DELETE SET NULL;

@@ -42,12 +42,36 @@ class Settings(BaseSettings):
     semantic_weight: float = 0.7
     lexical_weight: float = 0.3
 
+    # Hybrid retrieval signal weights (normalized by their sum).
+    hybrid_semantic_weight: float = 0.35
+    hybrid_keyword_weight: float = 0.2
+    hybrid_symbol_weight: float = 0.15
+    hybrid_file_name_weight: float = 0.05
+    hybrid_runtime_location_weight: float = 0.15
+    hybrid_git_change_weight: float = 0.1
+    recent_commits_for_retrieval: int = 10
+
+    # Relationship expansion and context size.
+    related_top_k: int = 6
+    flow_top_k: int = 8
+    flow_promote_score: float = 0.8
+    flow_promote_max: int = 5
+    relationship_max_depth: int = 2
+    context_max_chars: int = 24_000
+
+    max_commit_hypotheses: int = 3
+    max_issue_hypotheses: int = 3
+
     cors_origins: str = "http://localhost:5173"
     export_debug_json: bool = False
 
     @property
     def repositories_dir(self) -> Path:
         return self.workspace_dir / "repos"
+
+    @property
+    def worktrees_dir(self) -> Path:
+        return self.workspace_dir / "worktrees"
 
     @property
     def exports_dir(self) -> Path:

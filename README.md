@@ -30,7 +30,7 @@ apps/
       db.py            engine, sessions, schema bootstrap, health probe
       models/          SQLAlchemy models (mirror db/init/001_schema.sql)
       schemas/         Pydantic request/response models
-      routers/         /health, /repositories, /debug-runs
+      routers/         /health, /repositories, /debug-runs, /commit-analyses
       services/        scanning, chunking, indexing, retrieval, git, commands,
                        stack traces, context, hypothesis, validation, tickets
     db/
@@ -183,14 +183,49 @@ container, with a timeout and a reduced environment.
 
 The run page polls while the pipeline runs and shows:
 
-- the runtime logs and stack trace;
-- retrieved code with semantic, lexical and combined scores;
+- the runtime logs and stack trace, plus values extracted from the output
+  (expected vs actual, which mismatched field is the root and which are
+  propagated);
+- retrieved code with the signals that selected each chunk, and related code
+  reached through calls, imports, types and shared data;
 - `git blame` and the suspect commit;
 - the LLM hypothesis;
-- every validation check and the overall result.
+- every validation check and the overall result (`validated`, `needs_review`
+  or `rejected`).
 
 Click **Create Draft** for the mock Jira ticket. It is stored locally and never
 sent anywhere.
+
+## Phase 2: evidence-grounded diagnosis and commit analysis
+
+- **Structured runtime evidence** (`services/runtime_extraction.py`): expected
+  and actual values, mismatched fields, error lines, `file:line` locations,
+  exit code and JSON/logfmt log lines are extracted from command output and
+  stored next to the raw output (`evidence_records.data.structured`). Plain
+  text still works; it just yields `extracted: false`. Numeric mismatches that
+  deviate by the same factor are grouped as one likely upstream cause.
+- **Hybrid retrieval** (`services/retrieval.py`, `hybrid_retrieve`): semantic
+  similarity plus exact keyword, symbol, file-name, runtime-location and Git
+  change signals. Every chunk stores each signal's score, weight, contribution
+  and a readable reason. Retrieval now runs *after* the commands so runtime
+  evidence can steer it. Weights are `HYBRID_*_WEIGHT` settings.
+- **Relationship expansion** (`services/code_graph.py`): built at query time
+  with tree-sitter from the indexed chunks. Calls, imports, type references
+  and shared properties (one chunk reads `x.prop`, another writes it) link
+  primary evidence to related code. The same graph orders mismatched fields
+  by code dependency (root vs propagated).
+- **Validation** (`services/validation.py`): a failing command, an existing
+  file or a matching commit is never enough on its own. The hypothesis must
+  explain the observed behavior, sit on the executed path, and be able to
+  affect the root mismatched value. Blaming a value that only propagates an
+  upstream mismatch is `rejected`. Without runtime confirmation the result
+  stays `needs_review`.
+- **Commit analysis** (`services/commit_analysis.py`, dashboard
+  **Commit Analysis**): pick a commit or a base..head range. The changed files
+  are chunked at that revision, and changed symbols become primary evidence.
+  Optional approved commands run in a temporary `git worktree` at the analyzed
+  commit, which is always removed afterwards. Up to three ranked hypotheses
+  are generated and each one is validated.
 
 ## API
 
@@ -209,6 +244,9 @@ sent anywhere.
 | POST | `/debug-runs/{id}/run` | Start the pipeline (409 until all commands are approved, 503 if Ollama is down) |
 | GET | `/debug-runs/{id}/report` | Full report: evidence, hypothesis, validation, draft |
 | POST | `/debug-runs/{id}/jira-draft` | Create or regenerate the mock Jira draft |
+| GET | `/repositories/{id}/commits` | Recent commits (`?limit=`, max 200) for commit selection |
+| POST | `/commit-analyses` | `{repository_id, commit_sha \| base_sha+head_sha, setup_command?, analysis_command?, notes?}`: creates a draft commit-analysis run (approve/run/report via `/debug-runs/{id}/...`) |
+| GET | `/commit-analyses` | List commit-analysis runs (`?repository_id=`) |
 
 Interactive docs: <http://localhost:8000/docs>.
 

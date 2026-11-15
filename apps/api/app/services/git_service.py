@@ -194,3 +194,120 @@ def file_history(path: Path, file_path: str, limit: int = 10) -> list[dict]:
         sha, author, date, subject = (line.split("\t", 3) + ["", "", ""])[:4]
         history.append({"commit": sha, "author": author, "date": date, "subject": subject})
     return history
+
+
+SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")
+HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@")
+
+
+def resolve_commit(path: Path, sha: str) -> str:
+    """Full hash of a commit given as a 7-40 character hex SHA. Refs and options are rejected."""
+    sha = (sha or "").strip()
+    if not SHA_PATTERN.match(sha):
+        raise GitCommandError(f"'{sha}' is not a commit SHA (7-40 hexadecimal characters).")
+    return run_git(["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"], cwd=path).strip()
+
+
+def list_commits(path: Path, limit: int = 50) -> list[dict]:
+    output = run_git(["log", f"-n{limit}", "--date=iso-strict", "--format=%H%x09%P%x09%an%x09%ad%x09%s"], cwd=path)
+    commits = []
+    for line in output.splitlines():
+        sha, parents, author, date, subject = (line.split("\t", 4) + ["", "", "", ""])[:5]
+        commits.append(
+            {"sha": sha, "short": sha[:8], "parents": parents.split(), "author": author, "date": date, "subject": subject}
+        )
+    return commits
+
+
+def parent_of(path: Path, sha: str) -> str | None:
+    parents = run_git(["rev-list", "--parents", "-n1", sha], cwd=path).split()[1:]
+    return parents[0] if parents else None
+
+
+def is_ancestor(path: Path, ancestor: str, descendant: str) -> bool:
+    try:
+        run_git(["merge-base", "--is-ancestor", ancestor, descendant], cwd=path)
+        return True
+    except GitCommandError:
+        return False
+
+
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def range_commits(path: Path, base: str | None, head: str) -> list[dict]:
+    revision = f"{base}..{head}" if base else head
+    arguments = ["log", "--date=iso-strict", "--format=%H%x09%an%x09%ad%x09%s", revision]
+    if not base:
+        arguments.insert(1, "-n1")
+    commits = []
+    for line in run_git(arguments, cwd=path).splitlines():
+        sha, author, date, subject = (line.split("\t", 3) + ["", "", ""])[:4]
+        commits.append({"sha": sha, "short": sha[:8], "author": author, "date": date, "subject": subject})
+    return commits
+
+
+def range_diff(path: Path, base: str | None, head: str, context_lines: int = 3) -> str:
+    return run_git(["diff", f"-U{context_lines}", "--no-color", base or EMPTY_TREE, head, "--"], cwd=path)
+
+
+def range_changed_files(path: Path, base: str | None, head: str) -> list[dict]:
+    output = run_git(["diff", "--name-status", "--no-renames", base or EMPTY_TREE, head, "--"], cwd=path)
+    files = []
+    for line in output.splitlines():
+        status, _, file_path = line.partition("\t")
+        if file_path:
+            files.append({"status": status[:1], "file_path": file_path})
+    return files
+
+
+def changed_line_ranges(path: Path, base: str | None, head: str) -> dict[str, list[tuple[int, int]]]:
+    """New-side line ranges touched by the diff, per file (pure deletions map to the following line)."""
+    output = run_git(["diff", "-U0", "--no-color", "--no-renames", base or EMPTY_TREE, head, "--"], cwd=path)
+    ranges: dict[str, list[tuple[int, int]]] = {}
+    current: str | None = None
+    for line in output.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:]
+            current = target[2:] if target.startswith("b/") else None
+            continue
+        match = HUNK_HEADER.match(line)
+        if match and current:
+            start = int(match.group("start"))
+            count = int(match.group("count")) if match.group("count") is not None else 1
+            ranges.setdefault(current, []).append((max(1, start), max(1, start + max(count, 1) - 1)))
+    return ranges
+
+
+def file_at(path: Path, revision: str, file_path: str) -> str | None:
+    try:
+        return run_git(["show", f"{revision}:{file_path}"], cwd=path)
+    except GitCommandError:
+        return None
+
+
+def recent_changed_files(path: Path, limit_commits: int = 10) -> dict[str, float]:
+    """Files touched by the last N commits, weighted by recency (1.0 for HEAD, decaying)."""
+    output = run_git(["log", f"-n{limit_commits}", "--name-only", "--format=%x00%H"], cwd=path)
+    weights: dict[str, float] = {}
+    for index, block in enumerate(part for part in output.split("\x00") if part.strip()):
+        weight = round(1.0 / (1 + index * 0.5), 4)
+        for file_path in block.splitlines()[1:]:
+            if file_path.strip():
+                weights.setdefault(file_path.strip(), weight)
+    return weights
+
+
+def add_worktree(path: Path, destination: Path, revision: str) -> None:
+    if destination.exists():
+        remove_worktree(path, destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run_git(["worktree", "add", "--detach", "--force", str(destination), revision], cwd=path)
+
+
+def remove_worktree(path: Path, destination: Path) -> None:
+    try:
+        run_git(["worktree", "remove", "--force", str(destination)], cwd=path)
+    except GitCommandError:
+        shutil.rmtree(destination, ignore_errors=True)
+        run_git(["worktree", "prune"], cwd=path)

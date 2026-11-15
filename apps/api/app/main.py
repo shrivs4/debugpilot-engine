@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.db import ensure_schema
-from app.routers import debug_runs, health, repositories
+from app.routers import commit_analyses, debug_runs, health, repositories
 from app.services.ollama_client import OllamaError
 from app.services.repository_service import recover_interrupted_work
 
@@ -42,3 +42,4 @@ async def ollama_error_handler(_: Request, error: OllamaError) -> JSONResponse:
 app.include_router(health.router)
 app.include_router(repositories.router)
 app.include_router(debug_runs.router)
+app.include_router(commit_analyses.router)

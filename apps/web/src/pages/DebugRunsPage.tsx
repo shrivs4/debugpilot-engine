@@ -32,6 +32,7 @@ export function DebugRunsPage() {
                     <a href={`#/runs/${run.id}`}>#{run.id}</a>
                   </td>
                   <td>
+                    {run.run_type === "commit_analysis" && <Badge value="commit" label="commit analysis" />}{" "}
                     <a href={`#/runs/${run.id}`}>{run.issue_description}</a>
                   </td>
                   <td>{run.repository_name}</td>

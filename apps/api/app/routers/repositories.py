@@ -1,12 +1,14 @@
+from pathlib import Path
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import CodeChunk, File, Repository
-from app.schemas import RepositoryCreate, RepositoryOut, RepositorySyncOut
-from app.services import repository_service
-from app.services.git_service import BranchNameError, RepositoryUrlError
+from app.schemas import CommitOut, RepositoryCreate, RepositoryOut, RepositorySyncOut
+from app.services import git_service, repository_service
+from app.services.git_service import BranchNameError, GitCommandError, RepositoryUrlError
 from app.services.ollama_client import OllamaClient, get_ollama_client
 from app.services.repository_service import RepositoryConflictError
 
@@ -79,3 +81,15 @@ def sync_repository(
 
     background_tasks.add_task(repository_service.process_sync, repository.id, ollama)
     return repository_out(db, repository)
+
+
+@router.get("/{repository_id}/commits", response_model=list[CommitOut])
+def list_commits(repository_id: int, limit: int = 50, db: Session = Depends(get_db)) -> list[CommitOut]:
+    repository = _get(db, repository_id)
+    if not repository.local_path or not Path(repository.local_path).is_dir():
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Repository is {repository.status}; it has no checkout yet.")
+    try:
+        commits = git_service.list_commits(Path(repository.local_path), max(1, min(limit, 200)))
+    except GitCommandError as error:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(error)) from error
+    return [CommitOut(**commit) for commit in commits]

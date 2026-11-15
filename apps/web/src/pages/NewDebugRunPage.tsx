@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "../api";
+import { CommandApproval } from "../components/CommandApproval";
 import { ErrorBanner, Section } from "../components/ui";
 import { navigate } from "../hooks";
 import type { DebugRun, Repository } from "../types";
@@ -94,11 +95,11 @@ export function NewDebugRunPage() {
           )}
           <CommandApproval
             label="Analysis command"
-            command={run.analysis_command}
+            command={run.analysis_command ?? ""}
             approvedAt={run.analysis_command_approved_at}
             repositoryName={run.repository_name}
             disabled={busy}
-            onApprove={() => approve("analysis", run.analysis_command)}
+            onApprove={() => approve("analysis", run.analysis_command ?? "")}
           />
           <div className="button-row">
             <button type="button" onClick={start} disabled={!run.ready_to_run || busy}>
@@ -175,31 +176,6 @@ export function NewDebugRunPage() {
         </form>
         <ErrorBanner message={error} />
       </Section>
-    </div>
-  );
-}
-
-function CommandApproval(props: {
-  label: string;
-  command: string;
-  approvedAt: string | null;
-  repositoryName: string | null;
-  disabled: boolean;
-  onApprove: () => void;
-}) {
-  return (
-    <div className={`approval ${props.approvedAt ? "approved" : ""}`}>
-      <div className="approval-label">{props.label}</div>
-      <p className="approval-question">Run this command inside the selected repository?</p>
-      <pre className="command">$ {props.command}</pre>
-      <div className="muted small">Repository: {props.repositoryName}</div>
-      {props.approvedAt ? (
-        <div className="approved-text">✓ Approved {new Date(props.approvedAt).toLocaleTimeString()}</div>
-      ) : (
-        <button type="button" onClick={props.onApprove} disabled={props.disabled}>
-          Approve {props.label.toLowerCase()}
-        </button>
-      )}
     </div>
   );
 }

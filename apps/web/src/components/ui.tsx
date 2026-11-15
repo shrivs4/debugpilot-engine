@@ -10,6 +10,8 @@ const TONE: Record<string, string> = {
   failed: "bad",
   degraded: "warn",
   needs_review: "warn",
+  rejected: "bad",
+  no_bug_detected: "good",
   draft: "neutral",
   skipped: "neutral",
 };

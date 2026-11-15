@@ -14,6 +14,8 @@ from app.schemas import (
     DebugRunOut,
     DebugRunReport,
     HypothesisOut,
+    JiraDraftRequest,
+    HypothesisResult,
     RuntimeEvidenceOut,
     TicketDraftOut,
     ValidationOut,
@@ -29,7 +31,8 @@ router = APIRouter(prefix="/debug-runs", tags=["debug-runs"])
 
 def _ready_to_run(run: DebugRun) -> bool:
     setup_ok = not run.setup_command or run.setup_command_approved_at is not None
-    return run.status == "draft" and setup_ok and run.analysis_command_approved_at is not None
+    analysis_ok = not run.analysis_command or run.analysis_command_approved_at is not None
+    return run.status == "draft" and setup_ok and analysis_ok
 
 
 def run_out(run: DebugRun) -> DebugRunOut:
@@ -94,7 +97,7 @@ def approve_command(run_id: int, body: CommandApproval, db: Session = Depends(ge
 
     expected = run.setup_command if body.kind == "setup" else run.analysis_command
     if expected is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This run has no setup command.")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"This run has no {body.kind} command.")
     if body.command.strip() != expected:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -122,7 +125,7 @@ def start_debug_run(
         raise HTTPException(status.HTTP_409_CONFLICT, f"Run is already {run.status}. Create a new run to try again.")
     if run.setup_command and run.setup_command_approved_at is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "The setup command has not been approved.")
-    if run.analysis_command_approved_at is None:
+    if run.analysis_command and run.analysis_command_approved_at is None:
         raise HTTPException(status.HTTP_409_CONFLICT, "The analysis command has not been approved.")
     if run.repository.status != "ready":
         raise HTTPException(
@@ -149,6 +152,22 @@ def _latest(db: Session, model, run_id: int):
     ).first()
 
 
+def _ranked_hypotheses(db: Session, run_id: int) -> list[tuple[Hypothesis, ValidationResult | None]]:
+    """The run's hypotheses, best rank first, each with its latest validation."""
+    hypotheses = db.scalars(
+        select(Hypothesis).where(Hypothesis.debug_run_id == run_id).order_by(Hypothesis.rank, Hypothesis.id.desc())
+    ).all()
+    validations = db.scalars(
+        select(ValidationResult)
+        .where(ValidationResult.debug_run_id == run_id)
+        .order_by(ValidationResult.created_at.desc(), ValidationResult.id.desc())
+    ).all()
+    by_hypothesis: dict[int, ValidationResult] = {}
+    for validation in validations:
+        by_hypothesis.setdefault(validation.hypothesis_id, validation)
+    return [(item, by_hypothesis.get(item.id)) for item in hypotheses]
+
+
 @router.get("/{run_id}/report", response_model=DebugRunReport)
 def get_report(run_id: int, db: Session = Depends(get_db)) -> DebugRunReport:
     run = _get(db, run_id)
@@ -156,8 +175,8 @@ def get_report(run_id: int, db: Session = Depends(get_db)) -> DebugRunReport:
         select(EvidenceRecord).where(EvidenceRecord.debug_run_id == run_id).order_by(EvidenceRecord.id)
     ).all()
     git = next((item for item in evidence if item.kind == "git"), None)
-    hypothesis = _latest(db, Hypothesis, run_id)
-    validation = _latest(db, ValidationResult, run_id)
+    ranked = _ranked_hypotheses(db, run_id)
+    hypothesis, validation = ranked[0] if ranked else (None, None)
     ticket = _latest(db, TicketDraft, run_id)
 
     return DebugRunReport(
@@ -169,24 +188,66 @@ def get_report(run_id: int, db: Session = Depends(get_db)) -> DebugRunReport:
         hypothesis=HypothesisOut.model_validate(hypothesis) if hypothesis else None,
         validation=ValidationOut.model_validate(validation) if validation else None,
         ticket_draft=TicketDraftOut.model_validate(ticket) if ticket else None,
+        hypotheses=[
+            HypothesisResult(
+                hypothesis=HypothesisOut.model_validate(item),
+                validation=ValidationOut.model_validate(result) if result else None,
+            )
+            for item, result in ranked
+        ],
+        commit_analysis=run.commit_analysis,
+        conclusion=(run.context_package or {}).get("conclusion"),
     )
 
 
 @router.post("/{run_id}/jira-draft", response_model=TicketDraftOut, status_code=status.HTTP_201_CREATED)
-def create_jira_draft(run_id: int, db: Session = Depends(get_db)) -> TicketDraftOut:
-    """Create (or regenerate) the mock Jira draft. Nothing is sent to Jira."""
+def create_jira_draft(
+    run_id: int, body: JiraDraftRequest | None = None, db: Session = Depends(get_db)
+) -> TicketDraftOut:
+    """Create (or regenerate) the mock Jira draft. Nothing is sent to Jira.
+
+    Safety gate: a draft is only created for one explicitly identified hypothesis
+    whose latest validation is exactly `validated`. With several hypotheses the
+    caller must name it (`hypothesis_id`); nothing is selected implicitly.
+    """
     run = _get(db, run_id)
-    hypothesis = _latest(db, Hypothesis, run_id)
-    if run.status != "completed" or hypothesis is None:
+    ranked = _ranked_hypotheses(db, run_id)
+    if run.status != "completed" or not ranked:
         raise HTTPException(status.HTTP_409_CONFLICT, "A Jira draft needs a completed run with a hypothesis.")
+
+    hypothesis_id = body.hypothesis_id if body else None
+    if hypothesis_id is not None:
+        selected = next(((item, result) for item, result in ranked if item.id == hypothesis_id), None)
+        if selected is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Hypothesis {hypothesis_id} does not belong to run {run_id}.")
+    elif len(ranked) == 1:
+        selected = ranked[0]
+    else:
+        validated = sum(1 for _, result in ranked if result is not None and result.overall_result == "validated")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"This run has {len(ranked)} hypotheses ({validated} validated). Select one explicitly with "
+            "hypothesis_id; a Jira draft is never created from an implicitly chosen hypothesis.",
+        )
+
+    hypothesis, validation = selected
+    result = validation.overall_result if validation is not None else "not validated"
+    if result != "validated":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Human review required: hypothesis {hypothesis.rank} ({hypothesis.symbol or hypothesis.file_path or 'unnamed'}) "
+            f"is {result.replace('_', ' ')}. A Jira draft is only created for a validated hypothesis.",
+        )
 
     evidence = db.scalars(
         select(EvidenceRecord).where(EvidenceRecord.debug_run_id == run_id).order_by(EvidenceRecord.id)
     ).all()
-    fields = build_ticket_fields(run, run.repository, hypothesis, _latest(db, ValidationResult, run_id), evidence)
+    fields = build_ticket_fields(run, run.repository, hypothesis, validation, evidence)
 
     db.execute(delete(TicketDraft).where(TicketDraft.debug_run_id == run_id))
-    ticket = TicketDraft(debug_run_id=run_id, ticket_key=f"MOCK-{run_id}", status="draft", **fields)
+    ticket = TicketDraft(
+        debug_run_id=run_id, hypothesis_id=hypothesis.id, ticket_key=f"MOCK-{run_id}", status="draft", **fields
+    )
     db.add(ticket)
     db.commit()
     return TicketDraftOut.model_validate(ticket)
